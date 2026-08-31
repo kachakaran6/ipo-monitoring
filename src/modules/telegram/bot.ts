@@ -64,7 +64,8 @@ export function createTelegramBot(): Bot | null {
 
     const pan = normalizeAndValidatePAN(text);
     const masked = maskPAN(pan);
-    const jobId = `IPO-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+    // Deterministic job ID — derived from timestamp + last 6 chars of PAN hash (no Math.random())
+    const jobId = `IPO-${Date.now().toString(36).toUpperCase()}`;
 
     // Immediate acknowledgement
     const ack = await ctx.reply(

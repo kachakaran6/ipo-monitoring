@@ -61,6 +61,18 @@ const envSchema = z.object({
   ALLOTMENT_MAX_AGE_HOURS: z.coerce.number().default(72),
   BULK_WORKER_CONCURRENCY: z.coerce.number().default(5),
 
+  // Mock Provider Safety
+  ENABLE_MOCK_PROVIDERS: z
+    .string()
+    .default('false')
+    .transform((val) => val.toLowerCase() === 'true'),
+
+  // Fixture Safety — fixtures are ONLY allowed in test/development
+  FIXTURES_ENABLED: z
+    .string()
+    .default('false')
+    .transform((val) => val.toLowerCase() === 'true'),
+
   // Rate Limiting (RPM)
   LIMITER_NSE_RPM: z.coerce.number().default(30),
   LIMITER_BSE_RPM: z.coerce.number().default(30),
@@ -92,3 +104,30 @@ try {
 }
 
 export const env = parsedEnv;
+
+// ══════════════════════════════════════════════════════════════════
+// PRODUCTION GUARD: Prevent fabricated/mock data from ever reaching production.
+// If NODE_ENV=production and ENABLE_MOCK_PROVIDERS=true, abort immediately.
+// ══════════════════════════════════════════════════════════════════
+if (env.NODE_ENV === 'production' && env.ENABLE_MOCK_PROVIDERS) {
+  console.error('');
+  console.error('╔══════════════════════════════════════════════════════════════╗');
+  console.error('║  FATAL: ENABLE_MOCK_PROVIDERS=true in production mode!      ║');
+  console.error('║  Mock providers generate FABRICATED data.                   ║');
+  console.error('║  This violates the REAL-DATA-ONLY policy.                   ║');
+  console.error('║  Remove ENABLE_MOCK_PROVIDERS or set NODE_ENV=development.  ║');
+  console.error('╚══════════════════════════════════════════════════════════════╝');
+  console.error('');
+  process.exit(1);
+}
+
+if (env.NODE_ENV === 'production' && env.FIXTURES_ENABLED) {
+  console.error('');
+  console.error('╔══════════════════════════════════════════════════════════════╗');
+  console.error('║  FATAL: FIXTURES_ENABLED=true in production mode!           ║');
+  console.error('║  Fixture/test data must NEVER run in production.            ║');
+  console.error('║  Remove FIXTURES_ENABLED or set NODE_ENV=development.       ║');
+  console.error('╚══════════════════════════════════════════════════════════════╝');
+  console.error('');
+  process.exit(1);
+}

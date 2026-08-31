@@ -1,84 +1,42 @@
-import type { AllotmentProvider, AllotmentResult, IPO } from './AllotmentProvider.interface.js';
-import { ProviderRateLimiterManager } from '../rateLimiter.js';
-import { ProviderHealthTracker } from '../health.js';
-import { hashPAN, maskPAN } from '../../security/crypto.js';
-import { generateResultFingerprint } from '../../security/fingerprint.js';
-import { logger } from '../../utils/logger.js';
+/**
+ * KFintech Allotment Provider
+ *
+ * Target: https://ris.kfintech.com/ipostatus/
+ * Current state: CAPTCHA_REQUIRED (reCAPTCHA v2 enforced on all form submissions)
+ *
+ * This provider performs a real HTTP probe to verify KFintech is reachable,
+ * then returns CAPTCHA_REQUIRED with the official portal URL.
+ *
+ * NEVER returns: PENDING, NOT_ALLOTTED, ALLOTTED without a real authenticated response.
+ *
+ * When KFin Technologies releases a public REST API:
+ *  1. Add KFINTECH_API_URL to env
+ *  2. Override checkByPAN() with a real POST to that endpoint
+ *  3. Parse response and map to AllotmentStatus
+ *  4. Remove the CAPTCHA_REQUIRED return path
+ */
 
-export class KFintechProvider implements AllotmentProvider {
+import { CaptchaGatedRTAProvider } from './CaptchaGatedRTAProvider.js';
+
+export class KFintechProvider extends CaptchaGatedRTAProvider {
   public readonly name = 'KFINTECH';
-  public readonly supportedRegistrars = ['KFINTECH', 'KFIN_TECH', 'KARVY'];
-  private readonly limiter = ProviderRateLimiterManager.getLimiter('KFINTECH');
 
-  public supportsIPO(ipo: IPO): boolean {
-    if (!ipo.registrar) return false;
-    const r = ipo.registrar.toUpperCase().replace(/[^A-Z]/g, '_');
-    return this.supportedRegistrars.some((sr) => r.includes(sr));
-  }
+  /**
+   * Canonical registrar names that map to KFintech.
+   * Source: NSE/BSE IPO prospectus data.
+   */
+  public readonly supportedRegistrars = [
+    'KFINTECH',
+    'KFIN_TECH',
+    'KFIN_TECHNOLOGIES',
+    'KARVY', // Historical — pre-2020 filings
+    'KFin Technologies Limited'.toUpperCase().replace(/[^A-Z0-9]/g, '_'),
+  ];
 
-  public async checkByPAN(pan: string, ipo: IPO): Promise<AllotmentResult> {
-    const startTime = Date.now();
-    const panHash = hashPAN(pan);
-    const masked = maskPAN(pan);
-
-    return this.limiter.schedule(async () => {
-      try {
-        const duration = Date.now() - startTime;
-        await ProviderHealthTracker.recordSuccess(this.name, duration);
-
-        const status = 'PENDING';
-        const fingerprint = generateResultFingerprint({
-          panHash,
-          ipoId: ipo.id,
-          status,
-          allottedQuantity: 0,
-          issuePrice: ipo.issuePrice || undefined,
-        });
-
-        return {
-          panHash,
-          maskedPan: masked,
-          ipoId: ipo.id,
-          symbol: ipo.symbol,
-          companyName: ipo.companyName,
-          status,
-          appliedQuantity: ipo.lotSize,
-          allottedQuantity: 0,
-          issuePrice: ipo.issuePrice || undefined,
-          source: this.name,
-          checkedAt: new Date(),
-          confidence: 'HIGH',
-          fingerprint,
-        };
-      } catch (error) {
-        const duration = Date.now() - startTime;
-        await ProviderHealthTracker.recordFailure(this.name, duration);
-        logger.warn({ provider: this.name, ipo: ipo.symbol, error: (error as Error).message }, 'KFintech check failed');
-
-        const fingerprint = generateResultFingerprint({
-          panHash,
-          ipoId: ipo.id,
-          status: 'CHECK_FAILED',
-        });
-
-        return {
-          panHash,
-          maskedPan: masked,
-          ipoId: ipo.id,
-          symbol: ipo.symbol,
-          companyName: ipo.companyName,
-          status: 'CHECK_FAILED',
-          source: this.name,
-          checkedAt: new Date(),
-          confidence: 'LOW',
-          fingerprint,
-          errorMessage: (error as Error).message,
-        };
-      }
-    });
-  }
-
-  public async checkByApplicationNumber(applicationNumber: string, ipo: IPO): Promise<AllotmentResult> {
-    return this.checkByPAN('ABCDE1234F', ipo);
-  }
+  /**
+   * Primary allotment portal URL — official, verified.
+   * Users are directed here when automated check is unavailable.
+   */
+  protected readonly portalUrl = 'https://ris.kfintech.com/ipostatus/';
+  protected readonly healthCheckUrl = 'https://ris.kfintech.com/ipostatus/';
 }

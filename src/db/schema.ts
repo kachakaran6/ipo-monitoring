@@ -105,6 +105,10 @@ export const ipoMaster = pgTable(
     registrar: varchar('registrar', { length: 100 }), // MUFG_INTIME, KFINTECH, BIGSHARE, etc.
     registrarUrl: varchar('registrar_url', { length: 500 }),
 
+    // Provenance: every IPO must be traceable to the authoritative source record
+    sourceId: varchar('source_id', { length: 100 }), // Provider's own ID (NSE series ID, BSE script code)
+    sourceUrl: varchar('source_url', { length: 500 }), // URL of source IPO detail page
+
     subscriptionQib: numeric('subscription_qib', { precision: 8, scale: 2 }).default('0'),
     subscriptionNii: numeric('subscription_nii', { precision: 8, scale: 2 }).default('0'),
     subscriptionRetail: numeric('subscription_retail', { precision: 8, scale: 2 }).default('0'),
@@ -186,16 +190,24 @@ export const allotmentResults = pgTable(
       .references(() => ipoMaster.id, { onDelete: 'cascade' })
       .notNull(),
     applicationNumber: varchar('application_number', { length: 100 }),
-    status: varchar('status', { length: 50 }).notNull(), // ALLOTTED, NOT_ALLOTTED, PENDING, etc.
-    appliedQuantity: integer('applied_quantity').default(0),
-    allottedQuantity: integer('allotted_quantity').default(0),
-    issuePrice: numeric('issue_price', { precision: 10, scale: 2 }).default('0'),
-    amountApplied: numeric('amount_applied', { precision: 12, scale: 2 }).default('0'),
-    amountAllotted: numeric('amount_allotted', { precision: 12, scale: 2 }).default('0'),
-    refundAmount: numeric('refund_amount', { precision: 12, scale: 2 }).default('0'),
+    status: varchar('status', { length: 50 }).notNull(), // ALLOTTED, NOT_ALLOTTED, PENDING, CAPTCHA_REQUIRED, UNSUPPORTED, CHECK_FAILED, etc.
+    // IMPORTANT: appliedQuantity and allottedQuantity are NULLABLE.
+    // They must be null if the authoritative source did not return a value.
+    // NEVER default these to 0 — 0 is a valid allotted quantity (not allotted) and must only
+    // be set when the source explicitly confirms zero allotment.
+    appliedQuantity: integer('applied_quantity'),
+    allottedQuantity: integer('allotted_quantity'),
+    // issuePrice is NULLABLE. Only set from IPO master (authoritative) or RTA response.
+    issuePrice: numeric('issue_price', { precision: 10, scale: 2 }),
+    amountApplied: numeric('amount_applied', { precision: 12, scale: 2 }),
+    amountAllotted: numeric('amount_allotted', { precision: 12, scale: 2 }),
+    refundAmount: numeric('refund_amount', { precision: 12, scale: 2 }),
     dematCreditStatus: varchar('demat_credit_status', { length: 100 }),
     source: varchar('source', { length: 100 }).notNull(),
-    confidence: varchar('confidence', { length: 20 }).default('HIGH').notNull(),
+    sourceType: varchar('source_type', { length: 20 }), // NSE | BSE | RTA | LICENSED_API
+    confidence: varchar('confidence', { length: 20 }).default('LOW').notNull(),
+    // VERIFIED | PARTIAL | CONFLICT | FAILED
+    qualityScore: varchar('quality_score', { length: 20 }).default('FAILED').notNull(),
     rawReference: text('raw_reference'),
     fingerprint: varchar('fingerprint', { length: 64 }).notNull(),
     checkedAt: timestamp('checked_at', { withTimezone: true }).defaultNow().notNull(),

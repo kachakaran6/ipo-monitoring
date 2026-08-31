@@ -55,6 +55,10 @@ export interface IPO {
   gmp?: number | null;
   gmpPercentage?: number | null;
 
+  /** Provider's own ID for this IPO record (e.g. NSE series ID, BSE script code) */
+  sourceId?: string | null;
+  /** Canonical URL at the source where this IPO's data was obtained */
+  sourceUrl?: string | null;
   source: string;
   sourceUpdatedAt?: Date | null;
   createdAt?: Date;

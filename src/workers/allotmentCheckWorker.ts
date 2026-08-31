@@ -39,20 +39,23 @@ export function createAllotmentCheckWorker(): Worker<AllotmentCheckJobData> {
         status: ipoRecord.status as IPO['status'],
         lotSize: ipoRecord.lotSize,
         minimumApplication: ipoRecord.minimumApplication,
-        issuePrice: ipoRecord.issuePrice ? Number(ipoRecord.issuePrice) : undefined,
+        // issuePrice from master is authoritative — but still nullable
+        issuePrice: ipoRecord.issuePrice ? Number(ipoRecord.issuePrice) : null,
         registrar: ipoRecord.registrar,
         registrarUrl: ipoRecord.registrarUrl,
         source: ipoRecord.source,
+        sourceId: (ipoRecord as any).sourceId,
+        sourceUrl: (ipoRecord as any).sourceUrl,
       };
 
-      // 2. Decrypt PAN for provider query
+      // 2. Decrypt PAN for provider query (plaintext PAN is never logged)
       const plaintextPan = decryptPAN(encryptedPan);
       const masked = maskPAN(plaintextPan);
 
       // 3. Execute Allotment Check via AllotmentEngine
       const result = await allotmentEngine.checkAllotment(plaintextPan, ipo);
 
-      // 4. Fetch Previous Result to Detect State Transitions
+      // 4. Fetch Previous Result to detect state transitions
       const [previous] = await db
         .select()
         .from(allotmentResults)
@@ -67,35 +70,50 @@ export function createAllotmentCheckWorker(): Worker<AllotmentCheckJobData> {
 
       const hasStateChanged = !previous || previous.status !== result.status;
 
-      // 5. Store / Update result in Database
+      // 5. Store result in Database
+      // CRITICAL: quantities and price stored as null when not returned by source — never 0
       const [panProf] = await db
         .select({ id: panProfiles.id })
         .from(panProfiles)
         .where(eq(panProfiles.panHash, panHash))
         .limit(1);
 
-      await db.insert(allotmentResults).values({
-        panProfileId: panProf?.id || null,
-        panHash,
-        ipoId,
-        applicationNumber: result.applicationNumber,
-        status: result.status,
-        appliedQuantity: result.appliedQuantity || 0,
-        allottedQuantity: result.allottedQuantity || 0,
-        issuePrice: result.issuePrice ? String(result.issuePrice) : '0',
-        amountApplied: result.amountApplied ? String(result.amountApplied) : '0',
-        amountAllotted: result.amountAllotted ? String(result.amountAllotted) : '0',
-        refundAmount: result.refundAmount ? String(result.refundAmount) : '0',
-        dematCreditStatus: result.dematCreditStatus,
-        source: result.source,
-        confidence: result.confidence,
-        rawReference: result.rawReference,
-        fingerprint: result.fingerprint,
-        checkedAt: result.checkedAt,
-      });
+      // Only persist meaningful results — UNSUPPORTED means the provider doesn't support this IPO
+      if (result.status !== 'UNSUPPORTED') {
+        try {
+          await db.insert(allotmentResults).values({
+            panProfileId: panProf?.id || null,
+            panHash,
+            ipoId,
+            applicationNumber: result.applicationNumber,
+            status: result.status,
+            // CRITICAL: null if not returned by source — never default to 0
+            appliedQuantity: result.appliedQuantity ?? null,
+            allottedQuantity: result.allottedQuantity ?? null,
+            issuePrice: result.issuePrice != null ? String(result.issuePrice) : null,
+            amountApplied: result.amountApplied != null ? String(result.amountApplied) : null,
+            amountAllotted: result.amountAllotted != null ? String(result.amountAllotted) : null,
+            refundAmount: result.refundAmount != null ? String(result.refundAmount) : null,
+            dematCreditStatus: result.dematCreditStatus,
+            source: result.source,
+            sourceType: result.provenance?.sourceType ?? null,
+            confidence: result.confidence,
+            qualityScore: result.qualityScore ?? 'FAILED',
+            rawReference: result.rawReference,
+            fingerprint: result.fingerprint,
+            checkedAt: result.checkedAt,
+          });
+        } catch {
+          // Suppress duplicate fingerprint constraint (polling may re-check same IPO)
+        }
+      }
 
-      // 6. Trigger Notification only if result has changed and is meaningful
-      if (hasStateChanged && (result.status === 'ALLOTTED' || result.status === 'NOT_ALLOTTED')) {
+      // 6. Trigger Notification only on meaningful state transitions
+      // DO NOT notify on: CAPTCHA_REQUIRED, CHECK_FAILED, UNSUPPORTED, RATE_LIMITED
+      // Only notify when the authoritative source explicitly confirms ALLOTTED or NOT_ALLOTTED
+      const isAuthoritativeResult = result.status === 'ALLOTTED' || result.status === 'NOT_ALLOTTED';
+
+      if (hasStateChanged && isAuthoritativeResult) {
         const notifFingerprint = generateNotificationFingerprint({
           userId,
           panHash,
@@ -108,28 +126,48 @@ export function createAllotmentCheckWorker(): Worker<AllotmentCheckJobData> {
         let message = '';
 
         if (result.status === 'ALLOTTED') {
-          title = `🎉 IPO Allotment: ${ipo.companyName}`;
-          message = `<b>🎉 IPO ALLOTMENT RESULT</b>\n\n` +
+          title = `🎉 IPO Allotment Confirmed: ${ipo.companyName}`;
+          message =
+            `<b>🎉 IPO ALLOTMENT CONFIRMED</b>\n\n` +
             `<b>Company:</b> ${ipo.companyName}\n` +
+            `<b>IPO:</b> ${ipo.symbol}\n` +
             `<b>PAN:</b> ${masked}\n\n` +
-            `<b>Status:</b> 🟢 <b>ALLOTTED</b>\n` +
-            `<b>Applied:</b> ${result.appliedQuantity} shares\n` +
-            `<b>Allotted:</b> ${result.allottedQuantity} shares\n` +
-            `<b>Issue Price:</b> ₹${result.issuePrice}\n` +
-            `<b>Allotted Value:</b> ₹${result.amountAllotted?.toLocaleString('en-IN')}\n\n` +
-            `<b>Registrar:</b> ${ipo.registrar || 'Official'}\n` +
-            `<b>Checked:</b> ${formatToIST(result.checkedAt)}\n` +
-            `<b>Confidence:</b> ${result.confidence}`;
+            `<b>Status:</b> 🟢 <b>ALLOTTED</b>\n`;
+
+          // Only show fields that the source actually returned — no fabrication
+          if (result.appliedQuantity != null) {
+            message += `<b>Applied:</b> ${result.appliedQuantity} shares\n`;
+          }
+          if (result.allottedQuantity != null) {
+            message += `<b>Allotted:</b> ${result.allottedQuantity} shares\n`;
+          }
+          if (result.issuePrice != null) {
+            message += `<b>Issue Price:</b> ₹${result.issuePrice}\n`;
+          }
+          if (result.amountAllotted != null) {
+            message += `<b>Allotted Value:</b> ₹${Number(result.amountAllotted).toLocaleString('en-IN')}\n`;
+          }
+
+          message +=
+            `\n<b>Registrar:</b> ${ipo.registrar || 'Check official registrar'}\n` +
+            `<b>Source:</b> ${result.source}\n` +
+            `<b>Checked:</b> ${formatToIST(result.checkedAt)}`;
         } else {
           title = `IPO Result: ${ipo.companyName}`;
-          message = `<b>IPO ALLOTMENT RESULT</b>\n\n` +
+          message =
+            `<b>IPO ALLOTMENT RESULT</b>\n\n` +
             `<b>Company:</b> ${ipo.companyName}\n` +
+            `<b>IPO:</b> ${ipo.symbol}\n` +
             `<b>PAN:</b> ${masked}\n\n` +
-            `<b>Status:</b> 🔴 <b>NOT ALLOTTED</b>\n` +
-            `<b>Applied:</b> ${result.appliedQuantity} shares\n` +
-            `<b>Allotted:</b> 0 shares\n\n` +
-            `Refund expected according to issue timeline.\n` +
-            `<b>Registrar:</b> ${ipo.registrar || 'Official'}\n` +
+            `<b>Status:</b> 🔴 <b>NOT ALLOTTED</b>\n`;
+
+          if (result.appliedQuantity != null) {
+            message += `<b>Applied:</b> ${result.appliedQuantity} shares\n`;
+          }
+
+          message +=
+            `\n<b>Registrar:</b> ${ipo.registrar || 'Check official registrar'}\n` +
+            `<b>Source:</b> ${result.source}\n` +
             `<b>Checked:</b> ${formatToIST(result.checkedAt)}`;
         }
 
@@ -154,13 +192,17 @@ export function createAllotmentCheckWorker(): Worker<AllotmentCheckJobData> {
         );
       }
 
-      // 7. Automatic Polling Reschedule if still PENDING and within retry policy
+      // 7. Automatic Polling Reschedule
+      // CRITICAL: Only reschedule when provider explicitly returned PENDING.
+      // Never reschedule on CAPTCHA_REQUIRED, CHECK_FAILED, or UNSUPPORTED —
+      // these are not transient states that will resolve on retry without user action.
       const currentAttempt = pollAttempt || 1;
-      if (
+      const shouldReschedule =
         isPolling &&
-        result.status === 'PENDING' &&
-        currentAttempt < env.ALLOTMENT_MAX_ATTEMPTS
-      ) {
+        result.status === 'PENDING' && // Source must have explicitly returned PENDING
+        currentAttempt < env.ALLOTMENT_MAX_ATTEMPTS;
+
+      if (shouldReschedule) {
         const delayMs = env.ALLOTMENT_POLL_INTERVAL_MINUTES * 60 * 1000;
         await allotmentCheckQueue.add(
           'check:poll-next',
