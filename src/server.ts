@@ -59,4 +59,10 @@ async function startServer(): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-startServer();
+// Support executing as background worker when PROCESS_TYPE=worker is set
+if (process.env.PROCESS_TYPE === 'worker') {
+  logger.info('PROCESS_TYPE=worker detected, launching BullMQ worker subsystem...');
+  import('./worker.js');
+} else {
+  startServer();
+}
