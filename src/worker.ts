@@ -30,6 +30,9 @@ async function startWorkerService(): Promise<void> {
       }
     );
 
+    // Trigger an immediate initial sync on startup
+    await ipoSyncQueue.add('sync:startup', { force: true });
+
     // 2. Data retention cleanup every day at 3 AM UTC
     await cleanupQueue.add(
       'schedule:cleanup',
@@ -40,7 +43,7 @@ async function startWorkerService(): Promise<void> {
       }
     );
 
-    logger.info('✅ Recurring scheduled jobs registered');
+    logger.info('✅ Recurring scheduled jobs registered & initial sync dispatched');
   } catch (error) {
     logger.warn({ error: (error as Error).message }, 'Failed to schedule recurring jobs');
   }

@@ -14,13 +14,14 @@ export function createIPOSyncWorker(): Worker<IPOSyncJobData> {
       logger.info('Starting IPO synchronization job...');
 
       try {
-        // 1. Fetch Open & Upcoming IPOs from Registry
-        const [openIpos, upcomingIpos] = await Promise.all([
+        // 1. Fetch Open, Upcoming & Recently Closed IPOs from Registry
+        const [openIpos, upcomingIpos, closedIpos] = await Promise.all([
           ipoProviderRegistry.getOpenIPOs(),
           ipoProviderRegistry.getUpcomingIPOs(),
+          ipoProviderRegistry.getClosedIPOs(),
         ]);
 
-        const allIpos = [...openIpos, ...upcomingIpos];
+        const allIpos = [...openIpos, ...upcomingIpos, ...closedIpos];
         logger.info({ count: allIpos.length }, 'Fetched IPO listings from providers');
 
         for (const ipo of allIpos) {
