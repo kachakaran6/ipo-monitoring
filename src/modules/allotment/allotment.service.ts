@@ -1,7 +1,7 @@
 import { db } from '../../db/index.js';
 import { ipoMaster, allotmentResults, panProfiles } from '../../db/schema.js';
-import { eq, inArray, desc } from 'drizzle-orm';
-import { encryptPAN, hashPAN, maskPAN, getPANLast4 } from '../../security/crypto.js';
+import { eq, or, inArray, desc } from 'drizzle-orm';
+import { encryptPAN, hashPAN, maskPAN } from '../../security/crypto.js';
 import { allotmentEngine } from '../../providers/allotment/AllotmentEngine.js';
 import { allotmentCheckQueue } from '../../queues/index.js';
 import type { SingleCheckInput } from './allotment.schema.js';
@@ -18,7 +18,17 @@ export class AllotmentService {
     // Fetch target IPO(s)
     let targetIpos: Array<typeof ipoMaster.$inferSelect> = [];
     if (ipoId) {
-      const [specificIpo] = await db.select().from(ipoMaster).where(eq(ipoMaster.id, ipoId));
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ipoId);
+      const [specificIpo] = await db
+        .select()
+        .from(ipoMaster)
+        .where(
+          isUuid
+            ? eq(ipoMaster.id, ipoId)
+            : or(eq(ipoMaster.symbol, ipoId.toUpperCase()), eq(ipoMaster.slug, ipoId.toLowerCase()))
+        )
+        .limit(1);
+
       if (specificIpo) targetIpos = [specificIpo];
     } else {
       // Find all relevant open / closed / pending / recently allotted IPOs
@@ -77,24 +87,28 @@ export class AllotmentService {
       else if (result.status === 'PENDING') pendingCount++;
 
       // Save / update result in DB
-      await db.insert(allotmentResults).values({
-        panHash,
-        ipoId: ipo.id,
-        applicationNumber: result.applicationNumber,
-        status: result.status,
-        appliedQuantity: result.appliedQuantity || 0,
-        allottedQuantity: result.allottedQuantity || 0,
-        issuePrice: result.issuePrice ? String(result.issuePrice) : '0',
-        amountApplied: result.amountApplied ? String(result.amountApplied) : '0',
-        amountAllotted: result.amountAllotted ? String(result.amountAllotted) : '0',
-        refundAmount: result.refundAmount ? String(result.refundAmount) : '0',
-        dematCreditStatus: result.dematCreditStatus,
-        source: result.source,
-        confidence: result.confidence,
-        rawReference: result.rawReference,
-        fingerprint: result.fingerprint,
-        checkedAt: result.checkedAt,
-      });
+      try {
+        await db.insert(allotmentResults).values({
+          panHash,
+          ipoId: ipo.id,
+          applicationNumber: result.applicationNumber,
+          status: result.status,
+          appliedQuantity: result.appliedQuantity || 0,
+          allottedQuantity: result.allottedQuantity || 0,
+          issuePrice: result.issuePrice ? String(result.issuePrice) : '0',
+          amountApplied: result.amountApplied ? String(result.amountApplied) : '0',
+          amountAllotted: result.amountAllotted ? String(result.amountAllotted) : '0',
+          refundAmount: result.refundAmount ? String(result.refundAmount) : '0',
+          dematCreditStatus: result.dematCreditStatus,
+          source: result.source,
+          confidence: result.confidence,
+          rawReference: result.rawReference,
+          fingerprint: result.fingerprint,
+          checkedAt: result.checkedAt,
+        });
+      } catch {
+        // Suppress duplicate insert constraint error in quick polling
+      }
     }
 
     return {
