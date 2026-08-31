@@ -17,4 +17,9 @@ export class AdminController {
     const result = await adminService.triggerIPOSync();
     return reply.send({ success: true, data: result });
   }
+
+  public static async executeDirectSync(_req: FastifyRequest, reply: FastifyReply) {
+    const result = await adminService.executeDirectIPOSync();
+    return reply.send({ success: true, data: result });
+  }
 }
