@@ -9,6 +9,7 @@
  */
 
 import { NSE } from 'nse-bse-api';
+import os from 'node:os';
 import path from 'node:path';
 import type { IPODataProvider, IPO, IPOSubscriptionData } from './IPODataProvider.interface.js';
 import { ProviderRateLimiterManager } from '../rateLimiter.js';
@@ -42,7 +43,7 @@ export class NSEIPOProvider implements IPODataProvider {
   private nseClient: NSE;
 
   constructor() {
-    const downloadDir = path.resolve(process.cwd(), 'downloads');
+    const downloadDir = path.join(os.tmpdir(), 'nse-downloads');
     this.nseClient = new NSE(downloadDir);
   }
 
