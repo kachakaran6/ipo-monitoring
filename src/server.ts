@@ -20,14 +20,25 @@ async function startServer(): Promise<void> {
 
   const app = await buildApp();
 
-  // Start Telegram Long Polling in development if Webhook URL is not set
-  if (telegramBot && !env.TELEGRAM_WEBHOOK_URL && env.NODE_ENV !== 'test') {
-    logger.info('Starting Telegram Bot in long-polling mode (development)...');
-    telegramBot.start({
-      onStart: (botInfo) => {
-        logger.info({ username: botInfo.username }, 'Telegram bot polling active');
-      },
-    });
+  // Start Telegram Bot in Long Polling or Webhook mode
+  if (telegramBot && env.NODE_ENV !== 'test') {
+    if (env.TELEGRAM_WEBHOOK_URL) {
+      const webhookEndpoint = `${env.TELEGRAM_WEBHOOK_URL.replace(/\/$/, '')}/webhooks/telegram`;
+      logger.info({ webhookEndpoint }, 'Registering Telegram Webhook with Telegram servers...');
+      telegramBot.api
+        .setWebhook(webhookEndpoint, {
+          secret_token: env.TELEGRAM_WEBHOOK_SECRET || undefined,
+        })
+        .then(() => logger.info('✅ Telegram Webhook registered successfully'))
+        .catch((err) => logger.error({ error: err.message }, 'Failed to set Telegram webhook'));
+    } else {
+      logger.info('Starting Telegram Bot in long-polling mode...');
+      telegramBot.start({
+        onStart: (botInfo) => {
+          logger.info({ username: botInfo.username }, '🚀 Telegram bot polling active and listening for messages');
+        },
+      });
+    }
   }
 
   try {

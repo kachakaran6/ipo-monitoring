@@ -240,23 +240,135 @@ export function createTelegramBot(): Bot | null {
     }
   });
 
-  // Callback query dispatcher
+  // 9. Plain text handler: automatic PAN detection & instant checking
+  bot.on('message:text', async (ctx) => {
+    const text = ctx.message.text.trim();
+    if (text.startsWith('/')) return; // Handled by command handlers
+
+    // If user sends a valid 10-character PAN directly (e.g. LVIPK9127J)
+    if (isValidPAN(text)) {
+      const pan = normalizeAndValidatePAN(text);
+      const masked = maskPAN(pan);
+      const jobId = `IPO-${Date.now().toString(36).toUpperCase()}`;
+
+      await ctx.reply(
+        `⏳ <b>Checking IPO Allotment...</b>\n\n` +
+        `<b>PAN:</b> <code>${masked}</code>\n` +
+        `<b>Job:</b> <code>#${jobId}</code>\n\n` +
+        `<i>Scanning authoritative registrar databases...</i>`,
+        { parse_mode: 'HTML' }
+      );
+
+      try {
+        const summary = (await allotmentService.checkPAN(
+          { pan, async: false },
+          String(ctx.from?.id)
+        )) as import('../../types/allotment.types.js').PANCheckSummary;
+
+        const card = formatCheckSummaryCard(summary);
+        await ctx.reply(card, {
+          parse_mode: 'HTML',
+          reply_markup: getCheckResultKeyboard(pan.slice(-4)),
+        });
+      } catch (error) {
+        await ctx.reply(
+          `❌ <b>Check Failed:</b> ${(error as Error).message}\n<i>Please try again later.</i>`,
+          { parse_mode: 'HTML' }
+        );
+      }
+    }
+  });
+
+  // 10. Callback query dispatcher
   bot.on('callback_query:data', async (ctx) => {
     const data = ctx.callbackQuery.data;
 
-    if (data === 'cmd:ipos') {
-      const result = await ipoService.listIPOs({ page: 1, limit: 5 });
-      await ctx.reply(`Found ${result.ipos.length} active IPOs.`);
-    } else if (data === 'cmd:bulk') {
-      await ctx.reply('Send me your PAN list or upload a .txt/.csv file.');
-    } else if (data.startsWith('check:ipo:')) {
-      const symbol = data.replace('check:ipo:', '');
-      await ctx.reply(`To check your application for ${symbol}, run <code>/check &lt;PAN&gt;</code>`, {
-        parse_mode: 'HTML',
-      });
-    }
+    try {
+      if (data === 'cmd:ipos') {
+        const result = await ipoService.listIPOs({ page: 1, limit: 5 });
+        if (result.ipos.length === 0) {
+          await ctx.reply('No active IPOs found in master database.');
+        } else {
+          for (const ipoRecord of result.ipos) {
+            const ipo: import('../../types/ipo.types.js').IPO = {
+              id: ipoRecord.id,
+              symbol: ipoRecord.symbol,
+              companyName: ipoRecord.companyName,
+              slug: ipoRecord.slug,
+              exchange: ipoRecord.exchange as any,
+              issueType: ipoRecord.issueType as any,
+              mainboardOrSme: ipoRecord.mainboardOrSme as any,
+              status: ipoRecord.status as any,
+              lotSize: ipoRecord.lotSize,
+              minimumApplication: ipoRecord.minimumApplication,
+              priceBandMin: ipoRecord.priceBandMin ? Number(ipoRecord.priceBandMin) : undefined,
+              priceBandMax: ipoRecord.priceBandMax ? Number(ipoRecord.priceBandMax) : undefined,
+              issuePrice: ipoRecord.issuePrice ? Number(ipoRecord.issuePrice) : undefined,
+              openDate: ipoRecord.openDate,
+              closeDate: ipoRecord.closeDate,
+              allotmentDate: ipoRecord.allotmentDate,
+              listingDate: ipoRecord.listingDate,
+              registrar: ipoRecord.registrar,
+              registrarUrl: ipoRecord.registrarUrl,
+              source: ipoRecord.source,
+            };
 
-    await ctx.answerCallbackQuery();
+            await ctx.reply(formatIPOCard(ipo), {
+              parse_mode: 'HTML',
+              reply_markup: getIPODetailsKeyboard(ipo.symbol, ipo.registrarUrl),
+            });
+          }
+        }
+      } else if (data === 'cmd:bulk') {
+        await ctx.reply(
+          `📦 <b>BULK IPO CHECK</b>\n\n` +
+          `Send a list of PAN numbers (one per line or comma-separated) or attach a <b>.txt</b> or <b>.csv</b> file.`,
+          { parse_mode: 'HTML' }
+        );
+      } else if (data === 'cmd:help') {
+        await ctx.reply(
+          `📖 <b>Help & Commands</b>\n\n` +
+          `• <code>/check &lt;PAN&gt;</code> (or just send your 10-digit PAN)\n` +
+          `• <code>/bulk</code> - Check up to 1,000 PANs\n` +
+          `• <code>/ipos</code> - Active & upcoming IPOs\n` +
+          `• <code>/history &lt;PAN&gt;</code> - Success rate & stats\n\n` +
+          `<i>All data is verified against real authoritative registrar feeds only.</i>`,
+          { parse_mode: 'HTML' }
+        );
+      } else if (data === 'cmd:allotted' || data === 'cmd:pending') {
+        await ctx.reply(
+          `🔍 Send your PAN (e.g. <code>ABCDE1234F</code>) to check your allotment status across all active IPOs.`,
+          { parse_mode: 'HTML' }
+        );
+      } else if (data === 'cmd:settings') {
+        await ctx.reply(
+          `⚙️ <b>Notifications & Alerts</b>\n\n` +
+          `Automatic allotment notifications will be sent directly to this chat when allotment is finalized.`,
+          { parse_mode: 'HTML' }
+        );
+      } else if (data.startsWith('check:ipo:')) {
+        const symbol = data.replace('check:ipo:', '');
+        await ctx.reply(
+          `To check your application for <b>${symbol}</b>, send your PAN number or type <code>/check &lt;PAN&gt;</code>`,
+          { parse_mode: 'HTML' }
+        );
+      } else if (data.startsWith('sub:ipo:')) {
+        const symbol = data.replace('sub:ipo:', '');
+        const ipo = await ipoService.getIPOById(symbol).catch(() => null);
+        if (ipo) {
+          let subMsg = `📊 <b>Subscription Data: ${ipo.companyName} (${ipo.symbol})</b>\n\n`;
+          subMsg += `<b>QIB:</b> ${ipo.subscriptionQib || '—'}x\n`;
+          subMsg += `<b>NII / HNI:</b> ${ipo.subscriptionNii || '—'}x\n`;
+          subMsg += `<b>Retail:</b> ${ipo.subscriptionRetail || '—'}x\n`;
+          subMsg += `<b>Total:</b> <b>${ipo.subscriptionTotal || '—'}x</b>\n`;
+          await ctx.reply(subMsg, { parse_mode: 'HTML' });
+        } else {
+          await ctx.reply(`Subscription data currently unavailable for ${symbol}.`);
+        }
+      }
+    } finally {
+      await ctx.answerCallbackQuery().catch(() => {});
+    }
   });
 
   return bot;
