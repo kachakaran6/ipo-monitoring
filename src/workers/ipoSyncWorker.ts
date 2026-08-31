@@ -51,6 +51,8 @@ export function createIPOSyncWorker(): Worker<IPOSyncJobData> {
               issueSize: ipo.issueSize ? String(ipo.issueSize) : undefined,
               registrar: ipo.registrar,
               registrarUrl: ipo.registrarUrl,
+              sourceId: ipo.sourceId,
+              sourceUrl: ipo.sourceUrl,
               gmp: ipo.gmp ? String(ipo.gmp) : '0',
               gmpPercentage: ipo.gmpPercentage ? String(ipo.gmpPercentage) : '0',
               source: ipo.source,
