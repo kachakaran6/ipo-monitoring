@@ -5,8 +5,11 @@ const PAN_REGEX = /\b[A-Z]{5}[0-9]{4}[A-Z]\b/g;
 
 /**
  * Recursively redacts PAN occurrences in objects or strings before logging.
+ * Protected against circular references and deep Fastify internals.
  */
-function redactPAN(value: unknown): unknown {
+function redactPAN(value: unknown, seen = new WeakSet(), depth = 0): unknown {
+  if (depth > 6) return value;
+
   if (typeof value === 'string') {
     return value.replace(PAN_REGEX, (match) => {
       const last4 = match.slice(-4);
@@ -14,23 +17,34 @@ function redactPAN(value: unknown): unknown {
     });
   }
 
+  if (value === null || typeof value !== 'object') {
+    return value;
+  }
+
+  if (seen.has(value as object)) {
+    return '[Circular]';
+  }
+  seen.add(value as object);
+
   if (Array.isArray(value)) {
-    return value.map(redactPAN);
+    return value.map((item) => redactPAN(item, seen, depth + 1));
   }
 
-  if (value !== null && typeof value === 'object') {
-    const redacted: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (k.toLowerCase().includes('pan') && typeof v === 'string' && v.length === 10) {
-        redacted[k] = `XXXXX${v.slice(-4)}`;
-      } else {
-        redacted[k] = redactPAN(v);
-      }
+  const redacted: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    // Skip traversing deep Fastify internal sockets / streams
+    if (k === 'req' || k === 'res' || k === 'raw' || k === 'socket') {
+      redacted[k] = v;
+      continue;
     }
-    return redacted;
-  }
 
-  return value;
+    if (k.toLowerCase().includes('pan') && typeof v === 'string' && v.length === 10) {
+      redacted[k] = `XXXXX${v.slice(-4)}`;
+    } else {
+      redacted[k] = redactPAN(v, seen, depth + 1);
+    }
+  }
+  return redacted;
 }
 
 export const logger = pino({
