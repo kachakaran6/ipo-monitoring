@@ -12,7 +12,11 @@ export const createPanSchema = z.object({
 });
 
 export const getPanParamsSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().min(1, 'ID or PAN parameter is required'),
+});
+
+export const deletePanParamsSchema = z.object({
+  id: z.string().min(1, 'ID parameter is required'),
 });
 
 export type CreatePanInput = z.infer<typeof createPanSchema>;
