@@ -68,12 +68,75 @@ export class IPOService {
       .from(ipoSubscriptionSnapshots)
       .where(eq(ipoSubscriptionSnapshots.ipoId, ipo.id))
       .orderBy(desc(ipoSubscriptionSnapshots.snapshotAt))
-      .limit(50);
-
     return {
       ipo,
       snapshots,
     };
+  }
+
+  public async upsertIPO(input: import('./ipo.schema.js').CreateIpoInput) {
+    const slug = input.companyName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+    const [ipo] = await db
+      .insert(ipoMaster)
+      .values({
+        symbol: input.symbol,
+        companyName: input.companyName,
+        slug,
+        isin: input.isin,
+        exchange: input.exchange,
+        issueType: input.issueType,
+        mainboardOrSme: input.mainboardOrSme,
+        status: input.status,
+        openDate: input.openDate,
+        closeDate: input.closeDate,
+        allotmentDate: input.allotmentDate,
+        refundDate: input.refundDate,
+        dematCreditDate: input.dematCreditDate,
+        listingDate: input.listingDate,
+        faceValue: input.faceValue ? String(input.faceValue) : undefined,
+        priceBandMin: input.priceBandMin ? String(input.priceBandMin) : undefined,
+        priceBandMax: input.priceBandMax ? String(input.priceBandMax) : undefined,
+        issuePrice: input.issuePrice ? String(input.issuePrice) : undefined,
+        lotSize: input.lotSize,
+        minimumApplication: input.minimumApplication,
+        issueSize: input.issueSize ? String(input.issueSize) : undefined,
+        registrar: input.registrar,
+        registrarUrl: input.registrarUrl,
+        source: input.source,
+        sourceId: input.sourceId,
+        sourceUrl: input.sourceUrl,
+        sourceUpdatedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: ipoMaster.slug,
+        set: {
+          symbol: input.symbol,
+          companyName: input.companyName,
+          status: input.status,
+          openDate: input.openDate,
+          closeDate: input.closeDate,
+          allotmentDate: input.allotmentDate,
+          issuePrice: input.issuePrice ? String(input.issuePrice) : undefined,
+          registrar: input.registrar,
+          registrarUrl: input.registrarUrl,
+          sourceUpdatedAt: new Date(),
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+
+    return ipo;
+  }
+
+  public async bulkUpsertIPOs(ipos: import('./ipo.schema.js').CreateIpoInput[]) {
+    const results = [];
+    for (const item of ipos) {
+      const res = await this.upsertIPO(item);
+      results.push(res);
+    }
+    return { count: results.length, ipos: results };
   }
 }
 

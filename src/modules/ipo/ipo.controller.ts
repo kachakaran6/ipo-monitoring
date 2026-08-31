@@ -20,4 +20,18 @@ export class IPOController {
     const subscription = await ipoService.getSubscriptionHistory(params.id);
     return reply.send({ success: true, data: subscription });
   }
+
+  public static async createIPO(req: FastifyRequest, reply: FastifyReply) {
+    const { createIpoSchema } = await import('./ipo.schema.js');
+    const input = createIpoSchema.parse(req.body);
+    const ipo = await ipoService.upsertIPO(input);
+    return reply.status(201).send({ success: true, data: ipo });
+  }
+
+  public static async bulkCreateIPOs(req: FastifyRequest, reply: FastifyReply) {
+    const { bulkCreateIpoSchema } = await import('./ipo.schema.js');
+    const input = bulkCreateIpoSchema.parse(req.body);
+    const result = await ipoService.bulkUpsertIPOs(input.ipos);
+    return reply.status(201).send({ success: true, data: result });
+  }
 }
