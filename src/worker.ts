@@ -8,8 +8,21 @@ import { closeDatabaseConnection } from './db/index.js';
 import { closeRedisConnection } from './queues/connection.js';
 import { logger } from './utils/logger.js';
 
+import http from 'node:http';
+
 async function startWorkerService(): Promise<void> {
   logger.info('🚀 Starting BullMQ background workers...');
+
+  // Lightweight HTTP Health Server for Coolify / Docker health checks
+  const port = Number(process.env.PORT || 3000);
+  const healthServer = http.createServer((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', role: 'worker', timestamp: new Date().toISOString() }));
+  });
+
+  healthServer.listen(port, '0.0.0.0', () => {
+    logger.info(`Worker health probe listening on port ${port}`);
+  });
 
   // Initialize workers
   const allotmentWorker = createAllotmentCheckWorker();
